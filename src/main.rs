@@ -19,17 +19,17 @@ async fn authenticate<R: AsyncRead + Unpin, W: AsyncWrite + Unpin, const N: usiz
     if buf[0] != MAGIC_SOCKS5 {
         let b = buf[0];
         write.write_all(&[MAGIC_SOCKS5, 0xFF]).await?;
-        anyhow::bail!("{b:x} != {MAGIC_SOCKS5:x}");
+        anyhow::bail!("Unexpected magic number: {b:x}");
     }
     let nauth = buf[1] as usize;
     if nauth > buf.len() {
         write.write_all(&[MAGIC_SOCKS5, 0xFF]).await?;
-        anyhow::bail!("{nauth} > {}", buf.len());
+        anyhow::bail!("buf too small: {nauth} > {}", buf.len());
     }
     read.read_exact(&mut buf[..nauth]).await?;
     if !buf[..nauth].contains(&NO_AUTH) {
         write.write_all(&[MAGIC_SOCKS5, 0xFF]).await?;
-        anyhow::bail!("Not contains {NO_AUTH:x}");
+        anyhow::bail!("Unsupported auth method.");
     }
 
     write.write_all(&[MAGIC_SOCKS5, NO_AUTH]).await?;
@@ -52,7 +52,7 @@ impl TryFrom<u8> for CommandCode {
             0x01 => CommandCode::TcpConnect,
             0x02 => CommandCode::TcpBind,
             0x03 => CommandCode::UdpPort,
-            other => anyhow::bail!("Unknown {other:x}"),
+            other => anyhow::bail!("Unknown CommandCode {other:x}"),
         })
     }
 }
@@ -88,7 +88,7 @@ impl Request {
     ) -> anyhow::Result<Self> {
         sock.read_exact(&mut buf[..4]).await?;
         if buf[0] != MAGIC_SOCKS5 {
-            anyhow::bail!("{:x} != {MAGIC_SOCKS5:x}", buf[0]);
+            anyhow::bail!("Unexpected magic number: {:x}", buf[0]);
         }
 
         let command_code = buf[1].try_into()?;
@@ -207,5 +207,208 @@ async fn main() -> anyhow::Result<()> {
         let (conn, addr) = listener.accept().await?;
         log::info!("Accepted {addr}");
         task::spawn(service(conn));
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::str::FromStr;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_authenticate_succeeded() {
+        let mut buf = [0; 32];
+        let r = [0x05, 0x01, 0x00];
+        let mut w = vec![];
+        authenticate(&mut &r[..], &mut w, &mut buf).await.unwrap();
+        assert_eq!(&w, &[0x05, 0x00]);
+    }
+
+    #[tokio::test]
+    async fn test_authenticate_empty() {
+        let mut buf = [0; 32];
+        let r = [];
+        let mut w = vec![];
+        let err = authenticate(&mut &r[..], &mut w, &mut buf)
+            .await
+            .unwrap_err();
+        assert_eq!(err.to_string(), "early eof");
+        assert_eq!(&w, &[]);
+    }
+
+    #[tokio::test]
+    async fn test_authenticate_unexpected_header() {
+        let mut buf = [0; 32];
+        let r = [0x00, 0x00];
+        let mut w = vec![];
+        let err = authenticate(&mut &r[..], &mut w, &mut buf)
+            .await
+            .unwrap_err();
+        assert_eq!(err.to_string(), "Unexpected magic number: 0");
+        assert_eq!(&w, &[0x05, 0xFF]);
+    }
+
+    #[tokio::test]
+    async fn test_authenticate_buf_too_small() {
+        let mut buf = [0; 2];
+        let r = [0x05, 0x03];
+        let mut w = vec![];
+        let err = authenticate(&mut &r[..], &mut w, &mut buf)
+            .await
+            .unwrap_err();
+        assert_eq!(err.to_string(), "buf too small: 3 > 2");
+        assert_eq!(&w, &[0x05, 0xFF]);
+    }
+
+    #[tokio::test]
+    async fn test_authenticate_unsupported() {
+        let mut buf = [0; 2];
+        let r = [0x05, 0x01, 0x01];
+        let mut w = vec![];
+        let err = authenticate(&mut &r[..], &mut w, &mut buf)
+            .await
+            .unwrap_err();
+        assert_eq!(err.to_string(), "Unsupported auth method.");
+        assert_eq!(&w, &[0x05, 0xFF]);
+    }
+
+    #[test]
+    fn test_command_code_from() {
+        assert_eq!(
+            CommandCode::try_from(0x01).unwrap(),
+            CommandCode::TcpConnect
+        );
+        assert_eq!(CommandCode::try_from(0x02).unwrap(), CommandCode::TcpBind);
+        assert_eq!(CommandCode::try_from(0x03).unwrap(), CommandCode::UdpPort);
+        assert_eq!(
+            CommandCode::try_from(0x04).unwrap_err().to_string(),
+            "Unknown CommandCode 4"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_request_read_ipv4() {
+        let mut buf = [0; 32];
+        let r = [0x05, 0x01, 0x00, 0x01, 0x7F, 0x00, 0x00, 0x01, 0x01, 0xBB];
+        let req = Request::read(&mut &r[..], &mut buf).await.unwrap();
+        assert_eq!(req.command_code, CommandCode::TcpConnect);
+        if let DestAddr::Ipv4(addr) = req.addr {
+            assert_eq!(addr, Ipv4Addr::from_str("127.0.0.1").unwrap())
+        } else {
+            panic!()
+        }
+        assert_eq!(req.port, 443);
+    }
+
+    #[tokio::test]
+    async fn test_request_read_domain() {
+        let mut buf = [0; 32];
+        let r = [0x05, 0x01, 0x00, 0x03, 0x01, 0x61, 0x01, 0xBB];
+        let req = Request::read(&mut &r[..], &mut buf).await.unwrap();
+        assert_eq!(req.command_code, CommandCode::TcpConnect);
+        if let DestAddr::Domain(addr) = req.addr {
+            assert_eq!(addr, "a");
+        } else {
+            panic!()
+        }
+        assert_eq!(req.port, 443);
+    }
+
+    #[tokio::test]
+    async fn test_request_read_ipv6() {
+        let mut buf = [0; 32];
+        let r = [
+            0x05, 0x01, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x01, 0xBB,
+        ];
+        let req = Request::read(&mut &r[..], &mut buf).await.unwrap();
+        assert_eq!(req.command_code, CommandCode::TcpConnect);
+        if let DestAddr::Ipv6(addr) = req.addr {
+            assert_eq!(addr, Ipv6Addr::from_str("::1").unwrap())
+        } else {
+            panic!()
+        }
+        assert_eq!(req.port, 443);
+    }
+
+    #[tokio::test]
+    async fn test_request_read_unexpected_magic() {
+        let mut buf = [0; 32];
+        let r = [0x04, 0x01, 0x00, 0x01, 0x7F, 0x00, 0x00, 0x01, 0x01, 0xBB];
+        let err = Request::read(&mut &r[..], &mut buf).await.unwrap_err();
+        assert_eq!(err.to_string(), "Unexpected magic number: 4");
+    }
+
+    #[tokio::test]
+    async fn test_request_read_incorrect_addr() {
+        let mut buf = [0; 32];
+        let r = [0x05, 0x01, 0x00, 0x02, 0x7F, 0x00, 0x00, 0x01, 0x01, 0xBB];
+        let err = Request::read(&mut &r[..], &mut buf).await.unwrap_err();
+        assert_eq!(err.to_string(), "Unknown 2");
+    }
+
+    #[tokio::test]
+    async fn test_request_reply_ipv4() {
+        let req = Request {
+            command_code: CommandCode::TcpConnect,
+            addr: DestAddr::Ipv4(Ipv4Addr::from_str("127.0.0.1").unwrap()),
+            port: 443,
+        };
+
+        let mut w = vec![];
+        req.reply(&mut w, 0x00).await.unwrap();
+
+        assert_eq!(
+            w,
+            [0x05, 0x00, 0x00, 0x01, 0x7F, 0x00, 0x00, 0x01, 0x01, 0xBB]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_request_reply_domain() {
+        let req = Request {
+            command_code: CommandCode::TcpConnect,
+            addr: DestAddr::Domain("a".to_string()),
+            port: 443,
+        };
+
+        let mut w = vec![];
+        req.reply(&mut w, 0x00).await.unwrap();
+
+        assert_eq!(w, [0x05, 0x00, 0x00, 0x03, 0x01, 0x61, 0x01, 0xBB]);
+    }
+
+    #[tokio::test]
+    async fn test_request_reply_ipv6() {
+        let req = Request {
+            command_code: CommandCode::TcpConnect,
+            addr: DestAddr::Ipv6(Ipv6Addr::from_str("::1").unwrap()),
+            port: 443,
+        };
+
+        let mut w = vec![];
+        req.reply(&mut w, 0x00).await.unwrap();
+
+        assert_eq!(
+            w,
+            [
+                0x05, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x01, 0xBB
+            ]
+        );
+    }
+
+    #[test]
+    fn test_destaddr() {
+        assert_eq!(
+            DestAddr::Ipv4(Ipv4Addr::from_str("127.0.0.1").unwrap()).to_string(),
+            "127.0.0.1"
+        );
+        assert_eq!(DestAddr::Domain("a".to_string()).to_string(), "a");
+        assert_eq!(
+            DestAddr::Ipv6(Ipv6Addr::from_str("::1").unwrap()).to_string(),
+            "::1"
+        );
     }
 }
