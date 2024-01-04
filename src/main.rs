@@ -1,10 +1,9 @@
 use core::fmt;
 use std::env;
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 
 use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::task;
 
 const MAGIC_SOCKS5: u8 = 0x05;
 const NO_AUTH: u8 = 0x00;
@@ -153,6 +152,7 @@ async fn handshake<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
     authenticate(&mut read, &mut write, &mut buf).await?;
 
     let request = Request::read(&mut read, &mut buf).await?;
+    log::info!("{request:?}");
     if request.command_code != CommandCode::TcpConnect {
         let msg = format!("Not supported {:?}", request.command_code);
         request.reply(&mut write, 0x07).await?;
@@ -172,8 +172,8 @@ async fn handshake<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
     Ok(conn)
 }
 
-async fn service(mut source: TcpStream) {
-    log::debug!("BEGIN");
+async fn service(mut source: TcpStream, addr: SocketAddr) {
+    log::info!("BEGIN {addr}");
 
     let (mut read, mut write) = source.split();
     let mut conn = match handshake(&mut read, &mut write).await {
@@ -185,10 +185,10 @@ async fn service(mut source: TcpStream) {
     };
 
     if let Err(err) = io::copy_bidirectional(&mut source, &mut conn).await {
-        log::error!("{err}");
+        log::error!("ERROR {err}");
         return;
     };
-    log::debug!("DONE");
+    log::info!("DONE {addr}");
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -201,8 +201,7 @@ async fn main() -> anyhow::Result<()> {
 
     loop {
         let (conn, addr) = listener.accept().await?;
-        log::info!("Accepted {addr}");
-        task::spawn(service(conn));
+        tokio::spawn(service(conn, addr));
     }
 }
 
