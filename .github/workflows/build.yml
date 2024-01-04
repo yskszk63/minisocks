@@ -1,7 +1,8 @@
 name: build
 
 on:
-  push: # TEST
+  release:
+    types: [published]
 
 jobs:
   linux:
@@ -48,8 +49,15 @@ jobs:
 
   assembly:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     needs: [linux, windows]
     steps:
-      - uses: actions/download-artifact@v4
+    - uses: actions/checkout@v4
 
-      - run: ls -R
+    - uses: actions/download-artifact@v4
+
+    - run: gh release upload "$TAG_NAME" linux/minisocks-linux windows/minisocks-windows.exe
+      env:
+        GH_TOKEN: ${{ github.token }}
+        TAG_NAME: ${{ github.event.release.tag_name }}
