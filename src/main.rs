@@ -2,6 +2,7 @@ use core::fmt;
 use std::env;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 
+use socket2::{Domain, Socket, Type as SocketType};
 use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -195,8 +196,17 @@ async fn service(mut source: TcpStream, addr: SocketAddr) {
 async fn main() -> anyhow::Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
-    let port = env::var("PORT").unwrap_or_else(|_| "1080".to_string());
-    let listener = TcpListener::bind(format!("[::]:{port}")).await?;
+    let port = env::var("PORT")
+        .unwrap_or_else(|_| "1080".to_string())
+        .parse()?;
+
+    let sock = Socket::new(Domain::IPV6, SocketType::STREAM, None)?;
+    sock.set_nonblocking(true)?;
+    sock.set_only_v6(false)?;
+    sock.bind(&SocketAddr::new(Ipv6Addr::UNSPECIFIED.into(), port).into())?;
+    sock.listen(0)?;
+
+    let listener = TcpListener::from_std(sock.into())?;
     log::info!("Listening {} ...", listener.local_addr()?);
 
     loop {

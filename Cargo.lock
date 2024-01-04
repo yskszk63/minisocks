@@ -157,6 +157,7 @@ dependencies = [
  "anyhow",
  "env_logger",
  "log",
+ "socket2",
  "tokio",
 ]
 
