@@ -1,0 +1,54 @@
+name: build
+
+on:
+  push: # TEST
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - run: |
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+
+    - run: rustup --version
+
+    - run: cargo build --release
+
+    - run: mv target/release/miniproxy miniproxy-linux
+
+    - uses: actions/upload-artifact@v4
+      with:
+        name: linux
+        path: miniproxy-linux
+
+  windows:
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - run: |
+        $ProgressPreference = "SilentlyContinue"
+        Invoke-WebRequest https://win.rustup.rs/ -OutFile rustup-init.exe
+        .\rustup-init.exe -y --default-host=x86_64-pc-windows-msvc
+        del rustup-init.exe
+      shell: powershell
+
+    - run: rustup --version
+
+    - run: cargo build --release
+
+    - run: mv target/release/miniproxy.exe miniproxy-windows.exe
+
+    - uses: actions/upload-artifact@v4
+      with:
+        name: windows
+        path: miniproxy-windows.exe
+
+  assembly:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+
+      - run: ls -R
