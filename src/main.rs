@@ -120,29 +120,33 @@ impl Request {
             port,
         })
     }
+}
 
-    async fn reply<W: AsyncWrite + Unpin>(self, write: &mut W, state: u8) -> anyhow::Result<()> {
-        let mut b = vec![MAGIC_SOCKS5, state, 0x00];
-        match self.addr {
-            DestAddr::Ipv4(addr) => {
-                b.push(0x01);
-                b.extend(addr.octets());
-            }
-            DestAddr::Domain(addr) => {
-                b.push(0x03);
-                let mut v = addr.into_bytes();
-                b.push(v.len() as u8);
-                b.append(&mut v);
-            }
-            DestAddr::Ipv6(addr) => {
-                b.push(0x04);
-                b.extend(addr.octets());
-            }
-        };
-        b.extend(self.port.to_be_bytes());
-        write.write_all(&b).await?;
-        Ok(())
+async fn send_reply<W: AsyncWrite + Unpin>(
+    write: &mut W,
+    state: u8,
+    addr: Option<SocketAddr>, // For some reason, Java's SOCKS implementation does not work well when returning with `DOMAIN_NAME`.
+) -> anyhow::Result<()> {
+    let mut b = vec![MAGIC_SOCKS5, state, 0x00];
+    match addr {
+        Some(SocketAddr::V4(addr)) => {
+            b.push(0x01);
+            b.extend(addr.ip().octets());
+            b.extend(addr.port().to_be_bytes());
+        }
+        Some(SocketAddr::V6(addr)) => {
+            b.push(0x04);
+            b.extend(addr.ip().octets());
+            b.extend(addr.port().to_be_bytes());
+        }
+        None => {
+            b.push(0x01);
+            b.extend(Ipv4Addr::UNSPECIFIED.octets());
+            b.extend(0u16.to_be_bytes());
+        }
     }
+    write.write_all(&b).await?;
+    Ok(())
 }
 
 async fn handshake<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
@@ -156,7 +160,7 @@ async fn handshake<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
     log::info!("{request:?}");
     if request.command_code != CommandCode::TcpConnect {
         let msg = format!("Not supported {:?}", request.command_code);
-        request.reply(&mut write, 0x07).await?;
+        send_reply(&mut write, 0x07, None).await?;
         anyhow::bail!(msg)
     }
 
@@ -165,11 +169,11 @@ async fn handshake<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
     let conn = match TcpStream::connect(addr).await {
         Ok(conn) => conn,
         Err(err) => {
-            request.reply(&mut write, 0x04).await?;
+            send_reply(&mut write, 0x04, None).await?;
             return Err(err.into());
         }
     };
-    request.reply(&mut write, 0x00).await?;
+    send_reply(&mut write, 0x00, Some(conn.local_addr().unwrap())).await?;
     Ok(conn)
 }
 
@@ -202,7 +206,7 @@ async fn main() -> anyhow::Result<()> {
 
     let sock = Socket::new(Domain::IPV6, SocketType::STREAM, None)?;
     sock.set_nonblocking(true)?;
-    sock.set_only_v6(false)?;
+    sock.set_only_v6(false)?; // Required to use dual stack sockets on Windows.
     sock.bind(&SocketAddr::new(Ipv6Addr::UNSPECIFIED.into(), port).into())?;
     sock.listen(0)?;
 
@@ -355,14 +359,10 @@ mod test {
 
     #[tokio::test]
     async fn test_request_reply_ipv4() {
-        let req = Request {
-            command_code: CommandCode::TcpConnect,
-            addr: DestAddr::Ipv4(Ipv4Addr::from_str("127.0.0.1").unwrap()),
-            port: 443,
-        };
-
         let mut w = vec![];
-        req.reply(&mut w, 0x00).await.unwrap();
+        send_reply(&mut w, 0x00, Some(([127, 0, 0, 1], 443).into()))
+            .await
+            .unwrap();
 
         assert_eq!(
             w,
@@ -371,29 +371,11 @@ mod test {
     }
 
     #[tokio::test]
-    async fn test_request_reply_domain() {
-        let req = Request {
-            command_code: CommandCode::TcpConnect,
-            addr: DestAddr::Domain("a".to_string()),
-            port: 443,
-        };
-
-        let mut w = vec![];
-        req.reply(&mut w, 0x00).await.unwrap();
-
-        assert_eq!(w, [0x05, 0x00, 0x00, 0x03, 0x01, 0x61, 0x01, 0xBB]);
-    }
-
-    #[tokio::test]
     async fn test_request_reply_ipv6() {
-        let req = Request {
-            command_code: CommandCode::TcpConnect,
-            addr: DestAddr::Ipv6(Ipv6Addr::from_str("::1").unwrap()),
-            port: 443,
-        };
-
         let mut w = vec![];
-        req.reply(&mut w, 0x00).await.unwrap();
+        send_reply(&mut w, 0x00, Some((Ipv6Addr::LOCALHOST, 443).into()))
+            .await
+            .unwrap();
 
         assert_eq!(
             w,
