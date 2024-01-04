@@ -172,17 +172,11 @@ async fn handshake<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
     Ok(conn)
 }
 
-async fn copy<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(mut r: R, mut w: W) {
-    if let Err(err) = io::copy(&mut r, &mut w).await {
-        log::error!("{err}");
-    }
-}
-
-async fn service(source: TcpStream) {
-    let (mut read, mut write) = source.into_split();
-
+async fn service(mut source: TcpStream) {
     log::debug!("BEGIN");
-    let conn = match handshake(&mut read, &mut write).await {
+
+    let (mut read, mut write) = source.split();
+    let mut conn = match handshake(&mut read, &mut write).await {
         Ok(conn) => conn,
         Err(err) => {
             log::error!("{err}");
@@ -190,8 +184,10 @@ async fn service(source: TcpStream) {
         }
     };
 
-    let (r2, w2) = conn.into_split();
-    tokio::join!(copy(read, w2), copy(r2, write));
+    if let Err(err) = io::copy_bidirectional(&mut source, &mut conn).await {
+        log::error!("{err}");
+        return;
+    };
     log::debug!("DONE");
 }
 
