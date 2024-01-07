@@ -1,7 +1,7 @@
 use core::fmt;
-use std::env;
-use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
+use clap::Parser;
 use socket2::{Domain, Socket, Type as SocketType};
 use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -196,18 +196,36 @@ async fn service(mut source: TcpStream, addr: SocketAddr) {
     log::info!("DONE {addr}");
 }
 
+#[derive(Parser, Debug)]
+#[command(author, version, about)]
+struct Args {
+    /// Listening port
+    #[arg(short, long, env = "PORT", default_value = "1080")]
+    port: u16,
+
+    /// Listening IPv4 or IPv6 address.
+    #[arg(short, long, default_value = "::")]
+    addr: IpAddr,
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
+    let args = Args::parse();
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
-    let port = env::var("PORT")
-        .unwrap_or_else(|_| "1080".to_string())
-        .parse()?;
-
-    let sock = Socket::new(Domain::IPV6, SocketType::STREAM, None)?;
+    let sock = match args.addr {
+        IpAddr::V4(..) => {
+            let sock = Socket::new(Domain::IPV4, SocketType::STREAM, None)?;
+            sock
+        }
+        IpAddr::V6(..) => {
+            let sock = Socket::new(Domain::IPV6, SocketType::STREAM, None)?;
+            sock.set_only_v6(false)?; // Required to use dual stack sockets on Windows.
+            sock
+        }
+    };
     sock.set_nonblocking(true)?;
-    sock.set_only_v6(false)?; // Required to use dual stack sockets on Windows.
-    sock.bind(&SocketAddr::new(Ipv6Addr::UNSPECIFIED.into(), port).into())?;
+    sock.bind(&SocketAddr::new(args.addr, args.port).into())?;
     sock.listen(0)?;
 
     let listener = TcpListener::from_std(sock.into())?;
