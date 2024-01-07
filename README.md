@@ -1,3 +1,3 @@
 # minisocks
 
-My mini socks server.
+My minimal socks server.
