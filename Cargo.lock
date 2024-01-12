@@ -169,6 +169,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "acbf1af155f9b9ef647e42cdc158db4b64a1b61f743629225fde6f3e0be2a7c7"
 
 [[package]]
+name = "coverage-helper"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3036399e8abfc9d696c1ee94f7677f9704e903d96299b0026e339eed6055dcaf"
+
+[[package]]
 name = "env_logger"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -256,6 +262,7 @@ version = "0.2.0-beta"
 dependencies = [
  "anyhow",
  "clap",
+ "coverage-helper",
  "env_logger",
  "log",
  "socket2",

@@ -144,3 +144,92 @@ pub(crate) async fn handshake<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
     send_reply(&mut write, 0x5a, Some(conn.local_addr().unwrap())).await?;
     Ok(conn)
 }
+
+#[cfg(test)]
+mod test {
+    use std::str::FromStr;
+
+    use super::*;
+
+    #[test]
+    fn test_command_code_from() {
+        assert_eq!(
+            CommandCode::try_from(0x01).unwrap(),
+            CommandCode::TcpConnect
+        );
+        assert_eq!(CommandCode::try_from(0x02).unwrap(), CommandCode::TcpBind);
+        assert_eq!(
+            CommandCode::try_from(0x04).unwrap_err().to_string(),
+            "Unknown CommandCode 4"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_request_user() {
+        let mut buf = [0; 32];
+        let r = [0x01, 0x01, 0xBB, 0x7F, 0x00, 0x00, 0x01, 0x61, 0x00];
+        let req = Request::read(&mut &r[..], &mut buf).await.unwrap();
+        assert_eq!(req.user, "a");
+    }
+
+    #[tokio::test]
+    async fn test_request_read_ipv4() {
+        let mut buf = [0; 32];
+        let r = [0x01, 0x01, 0xBB, 0x7F, 0x00, 0x00, 0x01, 0x00];
+        let req = Request::read(&mut &r[..], &mut buf).await.unwrap();
+        assert_eq!(req.command_code, CommandCode::TcpConnect);
+        if let DestAddr::Ipv4(addr) = req.addr {
+            assert_eq!(addr, Ipv4Addr::from_str("127.0.0.1").unwrap())
+        } else {
+            panic!()
+        }
+        assert_eq!(req.port, 443);
+    }
+
+    #[tokio::test]
+    async fn test_request_read_domain() {
+        let mut buf = [0; 32];
+        let r = [0x01, 0x01, 0xBB, 0x00, 0x00, 0x00, 0x01, 0x00, 0x61, 0x00];
+        let req = Request::read(&mut &r[..], &mut buf).await.unwrap();
+        assert_eq!(req.command_code, CommandCode::TcpConnect);
+        if let DestAddr::Domain(addr) = req.addr {
+            assert_eq!(addr, "a");
+        } else {
+            panic!()
+        }
+        assert_eq!(req.port, 443);
+    }
+
+    #[tokio::test]
+    async fn test_request_reply_ipv4() {
+        let mut w = vec![];
+        send_reply(&mut w, 0x5a, Some(([127, 0, 0, 1], 443).into()))
+            .await
+            .unwrap();
+
+        assert_eq!(w, [0x00, 0x5a, 0x01, 0xbb, 0x7F, 0x00, 0x00, 0x01]);
+    }
+
+    #[tokio::test]
+    async fn test_request_reply_ipv6() {
+        let mut w = vec![];
+        send_reply(
+            &mut w,
+            0x5a,
+            Some((std::net::Ipv6Addr::LOCALHOST, 443).into()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(w, [0x00, 0x5a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+    }
+
+    #[test]
+    fn test_destaddr() {
+        assert_eq!(
+            DestAddr::Ipv4(Ipv4Addr::from_str("127.0.0.1").unwrap()).to_string(),
+            "127.0.0.1"
+        );
+        assert_eq!(DestAddr::Domain("a".to_string()).to_string(), "a");
+    }
+}
