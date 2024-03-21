@@ -22,6 +22,7 @@ jobs:
       - uses: actions/upload-pages-artifact@v3
 
   deploy:
+    needs: upload
     runs-on: ubuntu-latest
     permissions:
       id-token: write
