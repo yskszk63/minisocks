@@ -14,9 +14,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
-      - run: gh release download ${RELEASE} -D files
+      - run: gh release download ${RELEASE} -D _site
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE: ${{ steps.last-release.outputs.name }}
 
-      - run: ls files
+      - uses: actions/upload-pages-artifact@v3
