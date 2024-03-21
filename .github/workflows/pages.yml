@@ -14,4 +14,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
-      - run: echo ${{ steps.last-release.outputs.name }}
+      - run: gh release download ${RELEASE} -D files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE: ${{ steps.last-release.outputs.name }}
+
+      - run: ls files
