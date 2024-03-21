@@ -7,7 +7,9 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - run: gh release list --json name --limit 1 --jq '.[].name' > "$GITHUB_OUTPUT"
+      - run: (echo -n 'name='; gh release list --json name --limit 1 --jq '.[].name') > "$GITHUB_OUTPUT"
         id: last-release
+        env:
+          GH_TOKEN: ${{ github.token }}
 
-      - run: echo ${{ steps.last-release }}
+      - run: echo ${{ steps.last-release.outputs.name }}
