@@ -1,3 +1,5 @@
+name: pages
+
 on:
   workflow_dispatch:
 
@@ -5,4 +7,7 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - run: echo ok
+      - run: gh release list --json name --limit 1 --jq '.[].name' > "$GITHUB_OUTPUT"
+        id: last-release
+
+      - run: echo ${{ steps.last-release }}
